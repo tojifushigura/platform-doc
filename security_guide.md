@@ -1,44 +1,44 @@
 
-# Руководство по Безопасности Веб-приложения (React + PHP + MySQL)
+# Полное руководство по безопасности приложения React + PHP + MySQL
 
-Это руководство подготовлено для команды разработчиков, чтобы обеспечить **высокий уровень защиты веб-приложения**, написанного на React (React Native) и PHP (бэкенд), с использованием базы данных MySQL. Включены примеры и инструкции по реализации.
+Это документ для внедрения системы безопасной авторизации, защиты API, хеширования паролей и предотвращения атак.  
+Включает подробный анализ, рекомендации и примеры кода. Все действия адаптированы под **IONOS-хостинг** и 100% работу по **HTTPS (SSL + HSTS)**.
 
----
+## 🛡️ Раздел 1: Основные уязвимости
 
-## 1. Транспортный уровень: HTTPS и защита соединения
+1. Нет защиты от SQL-инъекций
+2. Пароли хранятся в открытом виде или через устаревший MD5
+3. API доступен без авторизации
+4. Хранение токенов в AsyncStorage
+5. Отсутствие заголовков безопасности (CSP, CORS, X-Frame и т.п.)
+6. Нет защиты от XSS, CSRF и MITM
 
-### ✅ Всегда использовать HTTPS
+## 🔐 Раздел 2: Рекомендации
 
-**Цель:** Защитить данные от перехвата в пути между клиентом и сервером.
+| Область         | Меры                                                  |
+|------------------|--------------------------------------------------------|
+| HTTPS            | ✅ Включить SSL и редирект с HTTP                      |
+| HSTS             | ✅ Прописать заголовок HSTS                            |
+| Certificate pin  | ✅ Применить SSL Pinning в React Native               |
+| Хеширование      | ✅ Использовать Argon2id через `password_hash`         |
+| API-доступ       | ✅ Проверка `Authorization: Bearer <token>`           |
+| JWT-токены       | ✅ Сессии через JWT                                    |
+| CSRF/XSS         | ✅ Токены и экранирование HTML                         |
+| Заголовки        | ✅ CSP, CORS, X-Frame, Permissions-Policy              |
+| Хранилище клиента| ✅ Использовать SecureStore                            |
 
-**Реализация:**
-- Все запросы к `fetch` или Axios должны начинаться с `https://`
-- На хостинге IONOS включить SSL-сертификат и сделать 301 редирект с `http` → `https`
+## 🔐 HTTPS + HSTS
 
-```apacheconf
-# .htaccess
+.htaccess:
+```apache
 RewriteEngine On
 RewriteCond %{HTTPS} off
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-```
 
-### ✅ Включить HSTS (HTTP Strict Transport Security)
-
-**Цель:** Запретить браузеру использовать HTTP.
-
-```apacheconf
 Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 ```
 
-### ✅ Certificate Pinning (для React Native)
-
-**Цель:** Исключить MITM-атаки при фальшивом HTTPS.
-
-**Пример (react-native-ssl-pinning):**
-
-```bash
-npm install react-native-ssl-pinning
-```
+## 🔒 Certificate Pinning в React Native
 
 ```js
 import {fetch} from 'react-native-ssl-pinning';
@@ -46,103 +46,87 @@ import {fetch} from 'react-native-ssl-pinning';
 fetch("https://app.domain.com/api", {
   method: "GET",
   sslPinning: {
-    certs: ["domain_cert"]  // файл domain_cert.cer в android/app/src/main/assets/
+    certs: ["domain_cert"]  // .cer файл в assets
   }
 });
 ```
 
----
-
-## 2. Хеширование паролей: Argon2
-
-### ✅ Использовать `password_hash()` с `ARGON2ID`
+## 🔐 Пример безопасной регистрации на PHP
 
 ```php
 $hash = password_hash($password, PASSWORD_ARGON2ID);
+$stmt = $pdo->prepare("INSERT INTO users (username, email, pass) VALUES (?, ?, ?)");
+$stmt->execute([$username, $email, $hash]);
 ```
 
-### ✅ Проверка пароля
+## 🔐 Проверка пароля при входе
 
 ```php
-if (password_verify($input, $hash)) {
-    // Успешно
+$stmt = $pdo->prepare("SELECT * FROM users WHERE email=?");
+$stmt->execute([$email]);
+$user = $stmt->fetch();
+if (password_verify($password, $user['pass'])) {
+    $token = JWT::encode(['id'=>$user['id']], 'SECRET_KEY', 'HS256');
+    echo json_encode(['status'=>true, 'token'=>$token]);
 }
 ```
 
----
+## 🔐 Заголовки безопасности (Apache)
 
-## 3. API: Авторизация и защита
-
-### ✅ JWT и заголовок Authorization
-
-**Генерация:**
-```php
-use Firebase\JWT\JWT;
-$jwt = JWT::encode(['userId'=>1], 'SECRET_KEY', 'HS256');
-```
-
-**Проверка:**
-```php
-$token = str_replace('Bearer ', '', $_SERVER['HTTP_AUTHORIZATION']);
-$data = JWT::decode($token, new Key('SECRET_KEY', 'HS256'));
-```
-
----
-
-## 4. HTTP Security Headers
-
-### ✅ Полная конфигурация в `.htaccess`
-
-```apacheconf
-# Безопасные заголовки
+```apache
+Header set X-Frame-Options "DENY"
 Header set X-Content-Type-Options "nosniff"
 Header set X-XSS-Protection "1; mode=block"
-Header always set X-Frame-Options "SAMEORIGIN"
 Header set Referrer-Policy "strict-origin-when-cross-origin"
+Header always set Content-Security-Policy "default-src 'self';"
 Header set Permissions-Policy "geolocation=(), microphone=()"
-Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'"
-Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 ```
 
----
+## 🧱 CORS
 
-## 5. Аутентификация и управление сессиями
+```php
+header("Access-Control-Allow-Origin: https://app.xv-platform.de");
+header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+header("Access-Control-Allow-Headers: Authorization, Content-Type");
+```
 
-### ✅ Хранение токена в SecureStore (React Native)
+## 🔐 Хранилище токена в клиенте (React Native)
 
 ```js
 import * as SecureStore from 'expo-secure-store';
-
 await SecureStore.setItemAsync('userToken', token);
+
 const token = await SecureStore.getItemAsync('userToken');
+fetch(url, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
 ```
 
----
-
-## 6. Защита от атак
-
-### ✅ SQL-инъекции
-
-**Использовать PDO и подготовленные запросы:**
+## ⚠️ Ограничение доступа к API по ключу
 
 ```php
-$stmt = $pdo->prepare("SELECT * FROM users WHERE email = :email");
-$stmt->execute(['email' => $email]);
+$headers = getallheaders();
+if ($headers['X-API-KEY'] !== 'secret_key_123') {
+    http_response_code(403);
+    exit;
+}
 ```
 
-### ✅ XSS
+## ✅ Хеширование: что использовать
 
-**Фильтрация вывода HTML:**
+| Алгоритм | Использовать? | Причина |
+|----------|----------------|---------|
+| MD5      | ❌             | Слишком быстрый, легко ломается |
+| bcrypt   | ✅             | Поддерживается PHP, медленный |
+| Argon2id | ✅✅            | Лучший выбор: защита от GPU-атак |
+
+## ✅ CSRF защита
 
 ```php
-echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8');
-```
-
-### ✅ CSRF (для форм)
-
-```php
-// PHP: генерация токена
-session_start();
+// генерируем токен
 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 ```
 
@@ -150,58 +134,18 @@ $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
 ```
 
-### ✅ CSP (Content Security Policy)
-
-```apacheconf
-Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'"
-```
-
-### ✅ CORS: ограничение источников
+## ✅ XSS защита
 
 ```php
-header("Access-Control-Allow-Origin: https://yourapp.com");
-header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
-header("Access-Control-Allow-Headers: Authorization, Content-Type");
+echo htmlspecialchars($user_input, ENT_QUOTES, 'UTF-8');
 ```
 
----
+## 📦 Финальные рекомендации
 
-## 7. Перехват трафика и защита
-
-- Используйте HTTPS для всех API.
-- Делайте проверку API-ключей или сигнатур (HMAC).
-- Никогда не храните чувствительные токены в AsyncStorage — только SecureStore.
-
----
-
-## 8. Дополнительно
-
-### 📌 Рейтлимитинг на PHP (пример с Redis)
-
-```php
-$key = "login_attempts:" . $_SERVER['REMOTE_ADDR'];
-$attempts = $redis->incr($key);
-if ($attempts == 1) $redis->expire($key, 60); // 1 минута
-if ($attempts > 5) die("Too many attempts");
-```
-
-### 📌 CAPTCHA
-
-Вставьте Google reCAPTCHA v3 на страницу регистрации:
-
-```html
-<script src="https://www.google.com/recaptcha/api.js?render=SITE_KEY"></script>
-```
-
----
-
-## ✅ Финальные рекомендации
-
-1. Использовать HTTPS всегда и везде.
-2. Настроить все headers в `.htaccess`
-3. Пароли: только bcrypt или argon2id + соль
-4. Аутентификация: JWT + SecureStore на клиенте
-5. Проверка API: только с авторизацией
-6. Отключить CORS и CSRF без валидации
-7. Не доверяйте фронтенду, проверяйте всё на сервере
-
+- ✅ Все запросы — только HTTPS
+- ✅ API — только с JWT или HMAC
+- ✅ Пароли — только через Argon2id
+- ✅ Все заголовки безопасности активны
+- ✅ Использовать SecureStore
+- ✅ Проверки CORS/CSRF
+- ✅ Все SQL-запросы через PDO prepare()
